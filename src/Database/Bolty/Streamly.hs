@@ -92,13 +92,13 @@ queryStreamP conn cypher params = do
 
 
 -- | Run a Cypher query and decode each record using a 'RowDecoder'.
--- Throws 'DecodeError' on decode failure.
+-- Throws 'Database.Bolty.Decode.DecodeError' on decode failure.
 queryStreamAs :: HasCallStack => RowDecoder a -> Connection -> Text -> IO (Stream IO a)
 queryStreamAs decoder conn cypher = queryStreamPAs decoder conn cypher H.empty
 
 
 -- | Run a parameterised Cypher query and decode each record using a 'RowDecoder'.
--- Throws 'DecodeError' on decode failure.
+-- Throws 'Database.Bolty.Decode.DecodeError' on decode failure.
 queryStreamPAs :: HasCallStack => RowDecoder a -> Connection -> Text -> H.HashMap Text PS.Ps -> IO (Stream IO a)
 queryStreamPAs decoder conn cypher params = do
   runResp <- requestResponseRunIO conn cypher params
@@ -107,7 +107,7 @@ queryStreamPAs decoder conn cypher params = do
   pure $ Stream.mapM (decodeOrThrow decoder columns) s
 
 
--- | Decode a single record, throwing 'DecodeError' on failure.
+-- | Decode a single record, throwing 'Database.Bolty.Decode.DecodeError' on failure.
 decodeOrThrow :: RowDecoder a -> V.Vector Text -> Record -> IO a
 decodeOrThrow decoder columns record =
   case decodeRow decoder columns record of
