@@ -3,7 +3,7 @@ version:             0.0.0.1
 synopsis:            Streamly streaming interface for bolty Neo4j driver
 description: |-
   Streaming queries over Neo4j using streamly streams.
-  Wraps bolty's BoltActionT with streamly's Stream type for
+  Wraps bolty's query functions with streamly's Stream type for
   lazy record-by-record consumption.
 homepage:            https://github.com/philippedev101/bolty#readme
 license:             Apache-2.0

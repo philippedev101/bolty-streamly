@@ -3,7 +3,7 @@
 -- | Streamly streaming interface for bolty Neo4j queries.
 --
 -- Instead of buffering all result records into a 'V.Vector', this module
--- yields records one-by-one as a @'Stream' ('BoltActionT' m) 'Record'@,
+-- yields records one-by-one as a @'Stream' IO 'Record'@,
 -- allowing constant-memory consumption of large result sets.
 --
 -- @
@@ -14,61 +14,64 @@
 --
 -- main :: IO ()
 -- main = do
---   pipe <- Bolt.connect cfg
---   Bolt.run pipe $ do
---     Bolt.begin
---     count <- BoltS.queryStream \"MATCH (n) RETURN n\"
---                & Stream.fold Fold.length
---     Bolt.commit
---   Bolt.close pipe
+--   conn <- Bolt.connect cfg
+--   s <- BoltS.queryStream conn \"MATCH (n) RETURN n\"
+--   count <- Stream.fold Fold.length s
+--   Bolt.close conn
 -- @
 module Database.Bolty.Streamly
-  ( -- * Streaming queries (within BoltActionT)
+  ( -- * Streaming queries
     queryStream
   , queryStreamP
+    -- * Streaming queries with decoding
+  , queryStreamAs
+  , queryStreamPAs
     -- * Low-level streaming
   , pullStream
     -- * Pool-based streaming
   , withPoolStream
   , withPoolStreamP
+  , withPoolStreamAs
+  , withPoolStreamPAs
     -- * Routing pool streaming
   , withRoutingStream
   , withRoutingStreamP
+  , withRoutingStreamAs
+  , withRoutingStreamPAs
     -- * Session streaming
   , sessionReadStream
   , sessionReadStreamP
   , sessionWriteStream
   , sessionWriteStreamP
+  , sessionReadStreamAs
+  , sessionReadStreamPAs
+  , sessionWriteStreamAs
+  , sessionWriteStreamPAs
     -- * Re-exports
   , Stream
   ) where
 
-import           Control.Monad.Except          (MonadError(..))
-import           Control.Monad.Reader          (MonadReader(..))
-import           Control.Monad.Trans           (MonadIO(..))
-import           Data.Text                     (Text)
-import           GHC.Stack                     (HasCallStack)
-import qualified Data.HashMap.Lazy             as H
-import qualified Data.PackStream.Ps            as PS
-import           Data.PackStream.Result        (Result(..))
-import           Streamly.Data.Stream          (Stream)
-import qualified Streamly.Data.Stream          as Stream
+import           Control.Exception              (throwIO)
+import           Data.Text                      (Text)
+import           GHC.Stack                      (HasCallStack)
+import qualified Data.HashMap.Lazy              as H
+import qualified Data.PackStream.Ps             as PS
+import           Data.PackStream.Result         (Result(..))
+import qualified Data.Vector                    as V
+import           Streamly.Data.Stream           (Stream)
+import qualified Streamly.Data.Stream           as Stream
 
-import           Control.Exception             (throwIO)
-import           Control.Monad.Except          (runExceptT)
-import           Control.Monad.Reader          (runReaderT)
-
-import           Database.Bolty.Connection     (requestResponseRun)
-import           Database.Bolty.Connection.Pipe (flush, fetch, requireState,
-                                                  getState, setState, reset)
+import           Database.Bolty.Connection      (requestResponseRunIO)
+import qualified Database.Bolty.Connection.Pipe as P
 import           Database.Bolty.Connection.Type
+import           Database.Bolty.Decode          (RowDecoder, decodeRow)
 import           Database.Bolty.Message.Request (Request(..), defaultPull)
-import           Database.Bolty.Message.Response (Response(..), Failure(..))
-import           Database.Bolty.Pool           (BoltPool, withConnection)
-import           Database.Bolty.Record         (Record)
-import           Database.Bolty.Routing        (AccessMode(..), RoutingPool,
-                                                withRoutingConnection)
-import           Database.Bolty.Session        (Session, readTransaction, writeTransaction)
+import           Database.Bolty.Message.Response (Response(..), Failure(..), successFields)
+import           Database.Bolty.Pool            (BoltPool, withConnection)
+import           Database.Bolty.Record          (Record)
+import           Database.Bolty.Routing         (AccessMode(..), RoutingPool,
+                                                  withRoutingConnection)
+import           Database.Bolty.Session         (Session, readTransaction, writeTransaction)
 
 
 -- | Run a Cypher query and return results as a stream of records.
@@ -77,15 +80,39 @@ import           Database.Bolty.Session        (Session, readTransaction, writeT
 -- without buffering the entire result set in memory.
 --
 -- Must be called in @Ready@ or @TXready@ state.
-queryStream :: (MonadIO m, HasCallStack) => Text -> BoltActionT m (Stream (BoltActionT m) Record)
-queryStream cypher = queryStreamP cypher H.empty
+queryStream :: HasCallStack => Connection -> Text -> IO (Stream IO Record)
+queryStream conn cypher = queryStreamP conn cypher H.empty
 
 
 -- | Run a parameterised Cypher query and return results as a stream.
-queryStreamP :: (MonadIO m, HasCallStack) => Text -> H.HashMap Text PS.Ps -> BoltActionT m (Stream (BoltActionT m) Record)
-queryStreamP cypher params = do
-  _ <- requestResponseRun cypher params
-  pure pullStream
+queryStreamP :: HasCallStack => Connection -> Text -> H.HashMap Text PS.Ps -> IO (Stream IO Record)
+queryStreamP conn cypher params = do
+  _ <- requestResponseRunIO conn cypher params
+  pullStream conn
+
+
+-- | Run a Cypher query and decode each record using a 'RowDecoder'.
+-- Throws 'DecodeError' on decode failure.
+queryStreamAs :: HasCallStack => RowDecoder a -> Connection -> Text -> IO (Stream IO a)
+queryStreamAs decoder conn cypher = queryStreamPAs decoder conn cypher H.empty
+
+
+-- | Run a parameterised Cypher query and decode each record using a 'RowDecoder'.
+-- Throws 'DecodeError' on decode failure.
+queryStreamPAs :: HasCallStack => RowDecoder a -> Connection -> Text -> H.HashMap Text PS.Ps -> IO (Stream IO a)
+queryStreamPAs decoder conn cypher params = do
+  runResp <- requestResponseRunIO conn cypher params
+  let columns = successFields runResp
+  s <- pullStream conn
+  pure $ Stream.mapM (decodeOrThrow decoder columns) s
+
+
+-- | Decode a single record, throwing 'DecodeError' on failure.
+decodeOrThrow :: RowDecoder a -> V.Vector Text -> Record -> IO a
+decodeOrThrow decoder columns record =
+  case decodeRow decoder columns record of
+    Right a  -> pure a
+    Left err -> throwIO err
 
 
 -- | Pull state machine.  @NeedPull@ means we need to send a new PULL
@@ -99,17 +126,16 @@ data PullState = NeedPull | Done
 -- (i.e. after a RUN has been sent and acknowledged). Sends PULL messages
 -- and yields each 'Record' as it arrives.  When the server signals
 -- completion, the state transitions back to @Ready@ / @TXready@.
-pullStream :: (MonadIO m, HasCallStack) => Stream (BoltActionT m) Record
-pullStream = Stream.concatEffect $ do
-  pipe <- ask
-  liftE $ requireState pipe [Streaming, TXstreaming] "PULL"
-  liftE $ flush pipe $ RPull defaultPull
-  pure $ Stream.unfoldrM (step pipe) NeedPull
+pullStream :: HasCallStack => Connection -> IO (Stream IO Record)
+pullStream conn = do
+  P.requireStateIO conn [Streaming, TXstreaming] "PULL"
+  P.flushIO conn $ RPull defaultPull
+  pure $ Stream.unfoldrM (step conn) NeedPull
   where
-    step :: (MonadIO m, HasCallStack) => Pipe -> PullState -> BoltActionT m (Maybe (Record, PullState))
+    step :: HasCallStack => Connection -> PullState -> IO (Maybe (Record, PullState))
     step _ Done = pure Nothing
-    step pipe NeedPull = do
-      response <- fetch pipe
+    step c NeedPull = do
+      response <- P.fetchIO c
       case response of
         RRecord record ->
           pure $ Just (record, NeedPull)
@@ -118,40 +144,28 @@ pullStream = Stream.concatEffect $ do
           let hasMore = case H.lookup "has_more" meta of
                           Just hm -> case PS.fromPs hm of
                             Success True -> True
-                            _               -> False
+                            _            -> False
                           Nothing -> False
           if hasMore then do
             -- Server has more batches; send another PULL and continue
-            liftE $ flush pipe $ RPull defaultPull
-            step pipe NeedPull
+            P.flushIO c $ RPull defaultPull
+            step c NeedPull
           else do
             -- All records consumed; transition state
-            st <- liftE $ getState pipe
-            liftE $ setState pipe $ case st of
+            st <- P.getState c
+            P.setState c $ case st of
               TXstreaming -> TXready
               _           -> Ready
             pure Nothing
 
         RIgnored -> do
-          reset pipe
-          throwError ResponseErrorIgnored
+          P.reset c
+          throwIO ResponseErrorIgnored
 
         RFailure Failure{code, message} -> do
-          liftE $ setState pipe Failed
-          reset pipe
-          throwError $ ResponseErrorFailure code message
-
-
--- ---------------------------------------------------------------------------
--- Internal: run BoltActionT, throwing on error
--- ---------------------------------------------------------------------------
-
-runBolt :: HasCallStack => Pipe -> BoltActionT IO a -> IO a
-runBolt pipe action = do
-  result <- runExceptT (runReaderT (runBoltActionT action) pipe)
-  case result of
-    Right x -> pure x
-    Left  e -> throwIO e
+          P.setState c Failed
+          P.reset c
+          throwIO $ ResponseErrorFailure code message
 
 
 -- ---------------------------------------------------------------------------
@@ -164,7 +178,7 @@ runBolt pipe action = do
 withPoolStream :: HasCallStack
               => BoltPool
               -> Text
-              -> (Stream (BoltActionT IO) Record -> BoltActionT IO a)
+              -> (Stream IO Record -> IO a)
               -> IO a
 withPoolStream pool cypher consume =
   withPoolStreamP pool cypher H.empty consume
@@ -175,11 +189,36 @@ withPoolStreamP :: HasCallStack
                => BoltPool
                -> Text
                -> H.HashMap Text PS.Ps
-               -> (Stream (BoltActionT IO) Record -> BoltActionT IO a)
+               -> (Stream IO Record -> IO a)
                -> IO a
 withPoolStreamP pool cypher params consume =
-  withConnection pool $ \pipe -> runBolt pipe $ do
-    s <- queryStreamP cypher params
+  withConnection pool $ \conn -> do
+    s <- queryStreamP conn cypher params
+    consume s
+
+
+-- | Like 'withPoolStream' but decodes each record using a 'RowDecoder'.
+withPoolStreamAs :: HasCallStack
+                => RowDecoder a
+                -> BoltPool
+                -> Text
+                -> (Stream IO a -> IO b)
+                -> IO b
+withPoolStreamAs decoder pool cypher consume =
+  withPoolStreamPAs decoder pool cypher H.empty consume
+
+
+-- | Like 'withPoolStreamP' but decodes each record using a 'RowDecoder'.
+withPoolStreamPAs :: HasCallStack
+                 => RowDecoder a
+                 -> BoltPool
+                 -> Text
+                 -> H.HashMap Text PS.Ps
+                 -> (Stream IO a -> IO b)
+                 -> IO b
+withPoolStreamPAs decoder pool cypher params consume =
+  withConnection pool $ \conn -> do
+    s <- queryStreamPAs decoder conn cypher params
     consume s
 
 
@@ -194,7 +233,7 @@ withRoutingStream :: HasCallStack
                  => RoutingPool
                  -> AccessMode
                  -> Text
-                 -> (Stream (BoltActionT IO) Record -> BoltActionT IO a)
+                 -> (Stream IO Record -> IO a)
                  -> IO a
 withRoutingStream rp mode cypher consume =
   withRoutingStreamP rp mode cypher H.empty consume
@@ -206,11 +245,38 @@ withRoutingStreamP :: HasCallStack
                   -> AccessMode
                   -> Text
                   -> H.HashMap Text PS.Ps
-                  -> (Stream (BoltActionT IO) Record -> BoltActionT IO a)
+                  -> (Stream IO Record -> IO a)
                   -> IO a
 withRoutingStreamP rp mode cypher params consume =
-  withRoutingConnection rp mode $ \pipe -> runBolt pipe $ do
-    s <- queryStreamP cypher params
+  withRoutingConnection rp mode $ \conn -> do
+    s <- queryStreamP conn cypher params
+    consume s
+
+
+-- | Like 'withRoutingStream' but decodes each record using a 'RowDecoder'.
+withRoutingStreamAs :: HasCallStack
+                   => RowDecoder a
+                   -> RoutingPool
+                   -> AccessMode
+                   -> Text
+                   -> (Stream IO a -> IO b)
+                   -> IO b
+withRoutingStreamAs decoder rp mode cypher consume =
+  withRoutingStreamPAs decoder rp mode cypher H.empty consume
+
+
+-- | Like 'withRoutingStreamP' but decodes each record using a 'RowDecoder'.
+withRoutingStreamPAs :: HasCallStack
+                    => RowDecoder a
+                    -> RoutingPool
+                    -> AccessMode
+                    -> Text
+                    -> H.HashMap Text PS.Ps
+                    -> (Stream IO a -> IO b)
+                    -> IO b
+withRoutingStreamPAs decoder rp mode cypher params consume =
+  withRoutingConnection rp mode $ \conn -> do
+    s <- queryStreamPAs decoder conn cypher params
     consume s
 
 
@@ -224,7 +290,7 @@ withRoutingStreamP rp mode cypher params consume =
 sessionReadStream :: HasCallStack
                  => Session
                  -> Text
-                 -> (Stream (BoltActionT IO) Record -> BoltActionT IO a)
+                 -> (Stream IO Record -> IO a)
                  -> IO a
 sessionReadStream session cypher consume =
   sessionReadStreamP session cypher H.empty consume
@@ -235,11 +301,11 @@ sessionReadStreamP :: HasCallStack
                   => Session
                   -> Text
                   -> H.HashMap Text PS.Ps
-                  -> (Stream (BoltActionT IO) Record -> BoltActionT IO a)
+                  -> (Stream IO Record -> IO a)
                   -> IO a
 sessionReadStreamP session cypher params consume =
-  readTransaction session $ do
-    s <- queryStreamP cypher params
+  readTransaction session $ \conn -> do
+    s <- queryStreamP conn cypher params
     consume s
 
 
@@ -249,7 +315,7 @@ sessionReadStreamP session cypher params consume =
 sessionWriteStream :: HasCallStack
                   => Session
                   -> Text
-                  -> (Stream (BoltActionT IO) Record -> BoltActionT IO a)
+                  -> (Stream IO Record -> IO a)
                   -> IO a
 sessionWriteStream session cypher consume =
   sessionWriteStreamP session cypher H.empty consume
@@ -260,9 +326,59 @@ sessionWriteStreamP :: HasCallStack
                    => Session
                    -> Text
                    -> H.HashMap Text PS.Ps
-                   -> (Stream (BoltActionT IO) Record -> BoltActionT IO a)
+                   -> (Stream IO Record -> IO a)
                    -> IO a
 sessionWriteStreamP session cypher params consume =
-  writeTransaction session $ do
-    s <- queryStreamP cypher params
+  writeTransaction session $ \conn -> do
+    s <- queryStreamP conn cypher params
+    consume s
+
+
+-- | Like 'sessionReadStream' but decodes each record using a 'RowDecoder'.
+sessionReadStreamAs :: HasCallStack
+                   => RowDecoder a
+                   -> Session
+                   -> Text
+                   -> (Stream IO a -> IO b)
+                   -> IO b
+sessionReadStreamAs decoder session cypher consume =
+  sessionReadStreamPAs decoder session cypher H.empty consume
+
+
+-- | Like 'sessionReadStreamP' but decodes each record using a 'RowDecoder'.
+sessionReadStreamPAs :: HasCallStack
+                    => RowDecoder a
+                    -> Session
+                    -> Text
+                    -> H.HashMap Text PS.Ps
+                    -> (Stream IO a -> IO b)
+                    -> IO b
+sessionReadStreamPAs decoder session cypher params consume =
+  readTransaction session $ \conn -> do
+    s <- queryStreamPAs decoder conn cypher params
+    consume s
+
+
+-- | Like 'sessionWriteStream' but decodes each record using a 'RowDecoder'.
+sessionWriteStreamAs :: HasCallStack
+                    => RowDecoder a
+                    -> Session
+                    -> Text
+                    -> (Stream IO a -> IO b)
+                    -> IO b
+sessionWriteStreamAs decoder session cypher consume =
+  sessionWriteStreamPAs decoder session cypher H.empty consume
+
+
+-- | Like 'sessionWriteStreamP' but decodes each record using a 'RowDecoder'.
+sessionWriteStreamPAs :: HasCallStack
+                     => RowDecoder a
+                     -> Session
+                     -> Text
+                     -> H.HashMap Text PS.Ps
+                     -> (Stream IO a -> IO b)
+                     -> IO b
+sessionWriteStreamPAs decoder session cypher params consume =
+  writeTransaction session $ \conn -> do
+    s <- queryStreamPAs decoder conn cypher params
     consume s
