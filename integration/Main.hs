@@ -17,7 +17,11 @@ import           System.Environment                (lookupEnv)
 import           Database.Bolty
 import           Data.PackStream.Ps                (Ps(..))
 import           Data.PackStream.Integer           (fromPSInteger)
-import           Database.Bolty.Streamly           (queryStream, queryStreamP)
+import           Database.Bolty.Streamly           (queryStream, queryStreamP,
+                                                    withPoolStream, withPoolStreamP,
+                                                    withRoutingStream, withRoutingStreamP,
+                                                    sessionReadStream, sessionReadStreamP,
+                                                    sessionWriteStream, sessionWriteStreamP)
 import qualified Streamly.Data.Stream              as Stream
 import qualified Streamly.Data.Fold                as Fold
 
@@ -39,6 +43,15 @@ getConfig :: IO ValidatedConfig
 getConfig = do
   cfg <- testConfig
   case validateConfig cfg of
+    Val.Failure errs -> fail $ "Config invalid: " <> show errs
+    Val.Success vc   -> pure vc
+
+
+getRoutingConfig :: IO ValidatedConfig
+getRoutingConfig = do
+  cfg <- testConfig
+  let routingCfg = cfg { routing = Routing }
+  case validateConfig routingCfg of
     Val.Failure errs -> fail $ "Config invalid: " <> show errs
     Val.Success vc   -> pure vc
 
@@ -171,9 +184,209 @@ largeResultTests = describe "Large result streaming" $ do
     count `shouldBe` 10000
 
 
+-- ================================================================
+-- Pool-based streaming tests
+-- ================================================================
+
+poolStreamTests :: TopSpec
+poolStreamTests = describe "Pool-based streaming" $ do
+
+  it "withPoolStream streams records" $ do
+    cfg <- liftIO getConfig
+    pool <- liftIO $ createPool cfg defaultPoolConfig
+    result <- liftIO $ withPoolStream pool "UNWIND range(1, 5) AS n RETURN n" $ \s ->
+      Stream.fold Fold.toList s
+    length result `shouldBe` 5
+    liftIO $ destroyPool pool
+
+  it "withPoolStreamP passes parameters" $ do
+    cfg <- liftIO getConfig
+    pool <- liftIO $ createPool cfg defaultPoolConfig
+    result <- liftIO $
+      withPoolStreamP pool "RETURN $x AS n" (H.singleton "x" (PsInteger 42)) $ \s ->
+        Stream.fold Fold.toList s
+    case asInt (V.head (head result)) of
+      Just n  -> n `shouldBe` 42
+      Nothing -> expectationFailure "Expected 42"
+    liftIO $ destroyPool pool
+
+  it "withPoolStream works with empty result" $ do
+    cfg <- liftIO getConfig
+    pool <- liftIO $ createPool cfg defaultPoolConfig
+    result <- liftIO $ withPoolStream pool "UNWIND [] AS n RETURN n" $ \s ->
+      Stream.fold Fold.toList s
+    length result `shouldBe` 0
+    liftIO $ destroyPool pool
+
+  it "withPoolStream with fold length" $ do
+    cfg <- liftIO getConfig
+    pool <- liftIO $ createPool cfg defaultPoolConfig
+    count <- liftIO $ withPoolStream pool "UNWIND range(1, 100) AS n RETURN n" $ \s ->
+      Stream.fold Fold.length s
+    count `shouldBe` 100
+    liftIO $ destroyPool pool
+
+
+-- ================================================================
+-- Routing pool streaming tests
+-- ================================================================
+
+routingStreamTests :: TopSpec
+routingStreamTests = describe "Routing pool streaming" $ do
+
+  it "withRoutingStream ReadAccess streams records" $ do
+    cfg <- liftIO getRoutingConfig
+    rp <- liftIO $ createRoutingPool cfg defaultRoutingPoolConfig
+    result <- liftIO $
+      withRoutingStream rp ReadAccess "UNWIND range(1, 5) AS n RETURN n" $ \s ->
+        Stream.fold Fold.toList s
+    length result `shouldBe` 5
+    liftIO $ destroyRoutingPool rp
+
+  it "withRoutingStream WriteAccess creates data" $ do
+    cfg <- liftIO getRoutingConfig
+    rp <- liftIO $ createRoutingPool cfg defaultRoutingPoolConfig
+    liftIO $ withRoutingStream rp WriteAccess
+      "CREATE (n:TestRoutingStream {value: 1}) RETURN n.value AS v" $ \s ->
+        Stream.fold Fold.toList s
+    -- Verify data was created
+    result <- liftIO $
+      withRoutingStream rp ReadAccess
+        "MATCH (n:TestRoutingStream) RETURN n.value AS v" $ \s ->
+          Stream.fold Fold.toList s
+    V.length (V.fromList result) `shouldBe` 1
+    -- Cleanup
+    liftIO $ withRoutingConnection rp WriteAccess $ \p ->
+      run p $ query "MATCH (n:TestRoutingStream) DELETE n" >> pure ()
+    liftIO $ destroyRoutingPool rp
+
+  it "withRoutingStreamP passes parameters" $ do
+    cfg <- liftIO getRoutingConfig
+    rp <- liftIO $ createRoutingPool cfg defaultRoutingPoolConfig
+    result <- liftIO $
+      withRoutingStreamP rp ReadAccess "RETURN $x AS n"
+        (H.singleton "x" (PsInteger 99)) $ \s ->
+          Stream.fold Fold.toList s
+    case asInt (V.head (head result)) of
+      Just n  -> n `shouldBe` 99
+      Nothing -> expectationFailure "Expected 99"
+    liftIO $ destroyRoutingPool rp
+
+  it "withRoutingStream handles large results" $ do
+    cfg <- liftIO getRoutingConfig
+    rp <- liftIO $ createRoutingPool cfg defaultRoutingPoolConfig
+    count <- liftIO $
+      withRoutingStream rp ReadAccess "UNWIND range(1, 1000) AS n RETURN n" $ \s ->
+        Stream.fold Fold.length s
+    count `shouldBe` 1000
+    liftIO $ destroyRoutingPool rp
+
+
+-- ================================================================
+-- Session streaming tests
+-- ================================================================
+
+sessionStreamTests :: TopSpec
+sessionStreamTests = describe "Session streaming" $ do
+
+  it "sessionReadStream reads data" $ do
+    cfg <- liftIO getConfig
+    pool <- liftIO $ createPool cfg defaultPoolConfig
+    session <- liftIO $ createSession pool defaultSessionConfig
+    result <- liftIO $
+      sessionReadStream session "UNWIND range(1, 5) AS n RETURN n" $ \s ->
+        Stream.fold Fold.toList s
+    length result `shouldBe` 5
+    liftIO $ destroyPool pool
+
+  it "sessionReadStreamP passes parameters" $ do
+    cfg <- liftIO getConfig
+    pool <- liftIO $ createPool cfg defaultPoolConfig
+    session <- liftIO $ createSession pool defaultSessionConfig
+    result <- liftIO $
+      sessionReadStreamP session "RETURN $x AS n" (H.singleton "x" (PsInteger 42)) $ \s ->
+        Stream.fold Fold.toList s
+    case asInt (V.head (head result)) of
+      Just n  -> n `shouldBe` 42
+      Nothing -> expectationFailure "Expected 42"
+    liftIO $ destroyPool pool
+
+  it "sessionWriteStream creates data and produces bookmark" $ do
+    cfg <- liftIO getConfig
+    pool <- liftIO $ createPool cfg defaultPoolConfig
+    session <- liftIO $ createSession pool defaultSessionConfig
+    bms0 <- liftIO $ getLastBookmarks session
+    bms0 `shouldBe` []
+    liftIO $ sessionWriteStream session
+      "CREATE (n:TestSessionStream {value: 1}) RETURN n.value AS v" $ \s ->
+        Stream.fold Fold.toList s
+    bms1 <- liftIO $ getLastBookmarks session
+    length bms1 `shouldBe` 1
+    -- Cleanup
+    liftIO $ withConnection pool $ \p -> run p $
+      query "MATCH (n:TestSessionStream) DELETE n" >> pure ()
+    liftIO $ destroyPool pool
+
+  it "sessionWriteStreamP with parameters" $ do
+    cfg <- liftIO getConfig
+    pool <- liftIO $ createPool cfg defaultPoolConfig
+    session <- liftIO $ createSession pool defaultSessionConfig
+    liftIO $ sessionWriteStreamP session
+      "CREATE (n:TestSessionStreamP {value: $v}) RETURN n.value AS v"
+      (H.singleton "v" (PsInteger 77)) $ \s ->
+        Stream.fold Fold.toList s
+    -- Verify
+    result <- liftIO $ sessionReadStream session
+      "MATCH (n:TestSessionStreamP) RETURN n.value AS v" $ \s ->
+        Stream.fold Fold.toList s
+    case asInt (V.head (head result)) of
+      Just n  -> n `shouldBe` 77
+      Nothing -> expectationFailure "Expected 77"
+    -- Cleanup
+    liftIO $ withConnection pool $ \p -> run p $
+      query "MATCH (n:TestSessionStreamP) DELETE n" >> pure ()
+    liftIO $ destroyPool pool
+
+
+-- ================================================================
+-- Routing session streaming tests
+-- ================================================================
+
+routingSessionStreamTests :: TopSpec
+routingSessionStreamTests = describe "Routing session streaming" $ do
+
+  it "routing sessionReadStream works" $ do
+    cfg <- liftIO getRoutingConfig
+    rp <- liftIO $ createRoutingPool cfg defaultRoutingPoolConfig
+    session <- liftIO $ createRoutingSession rp defaultSessionConfig
+    result <- liftIO $
+      sessionReadStream session "UNWIND range(1, 3) AS n RETURN n" $ \s ->
+        Stream.fold Fold.toList s
+    length result `shouldBe` 3
+    liftIO $ destroyRoutingPool rp
+
+  it "routing sessionWriteStream produces bookmark" $ do
+    cfg <- liftIO getRoutingConfig
+    rp <- liftIO $ createRoutingPool cfg defaultRoutingPoolConfig
+    session <- liftIO $ createRoutingSession rp defaultSessionConfig
+    liftIO $ sessionWriteStream session
+      "CREATE (n:TestRoutingSessStream {value: 1}) RETURN n.value AS v" $ \s ->
+        Stream.fold Fold.toList s
+    bms <- liftIO $ getLastBookmarks session
+    length bms `shouldBe` 1
+    -- Cleanup
+    liftIO $ withRoutingConnection rp WriteAccess $ \p ->
+      run p $ query "MATCH (n:TestRoutingSessStream) DELETE n" >> pure ()
+    liftIO $ destroyRoutingPool rp
+
+
 main :: IO ()
 main = runSandwichWithCommandLineArgs defaultOptions $ do
   streamingTests
   streamFoldTests
   streamTransactionTests
   largeResultTests
+  poolStreamTests
+  routingStreamTests
+  sessionStreamTests
+  routingSessionStreamTests
