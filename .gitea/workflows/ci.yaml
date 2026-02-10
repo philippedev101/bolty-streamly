@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: bolty-streamly
+
+      - name: Clone sibling repos
+        run: |
+          git clone https://github.com/philippedev101/bolty.git bolty
+          git clone https://github.com/philippedev101/packstream.git packstream
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl gcc g++ make libgmp-dev libtinfo-dev zlib1g-dev libffi-dev
+
+      - name: Install Stack
+        run: curl -sSL https://get.haskellstack.org/ | sh
+
+      - name: Build all packages
+        working-directory: bolty
+        run: stack build --no-nix --no-system-ghc
+
+      - name: Run unit tests
+        working-directory: bolty
+        run: stack test bolty-streamly:bolty-streamly-test --no-nix --no-system-ghc

@@ -1,0 +1,62 @@
+name:                bolty-streamly
+version:             0.0.0.1
+synopsis:            Streamly streaming interface for bolty Neo4j driver
+description: |-
+  Streaming queries over Neo4j using streamly streams.
+  Wraps bolty's BoltActionT with streamly's Stream type for
+  lazy record-by-record consumption.
+homepage:            https://github.com/philippedev101/bolty#readme
+license:             Apache-2.0
+author:              philippedev101
+maintainer:          philippedev101@gmail.com
+copyright:           (c) 2023 philippedev101
+category:            Database
+license-file:        LICENSE
+
+language: GHC2021
+
+dependencies:
+  - base >= 4.7 && < 5
+  - bolty
+  - bytestring
+  - mtl
+  - packstream
+  - streamly-core >= 0.2.0
+  - text
+  - unordered-containers
+  - vector
+
+ghc-options:
+  - -Wall
+  - -Wcompat
+  - -Widentities
+  - -Wincomplete-record-updates
+  - -Wincomplete-uni-patterns
+  - -Wredundant-constraints
+
+library:
+  source-dirs: src
+
+tests:
+  bolty-streamly-test:
+    source-dirs: test
+    main: Main.hs
+    dependencies:
+      - bolty-streamly
+      - sandwich
+    ghc-options:
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
+  bolty-streamly-integration:
+    source-dirs: integration
+    main: Main.hs
+    dependencies:
+      - bolty-streamly
+      - data-default
+      - sandwich
+      - validation-selective
+    ghc-options:
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
