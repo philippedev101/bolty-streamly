@@ -14,6 +14,7 @@ import qualified Validation                        as Val
 import           System.Environment                (lookupEnv)
 
 import           Database.Bolty
+import           Database.Bolty.Connection         (queryIO)
 import           Data.PackStream.Ps                (Ps(..))
 import           Data.PackStream.Integer           (fromPSInteger)
 import           Data.Int                          (Int64)
@@ -166,12 +167,12 @@ streamTransactionTests = describe "Streaming in transactions" $ do
   it "queryStream with write in transaction" $ do
     liftIO $ withConn $ \p ->
       withTransaction p $ \conn -> do
-        _ <- query conn "CREATE (n:TestStreamTx {value: 1})"
+        _ <- queryIO conn "CREATE (n:TestStreamTx {value: 1})"
         s <- queryStream conn "MATCH (n:TestStreamTx) RETURN n.value AS v"
         result <- Stream.fold Fold.toList s
         length result `shouldBe` 1
     -- Cleanup
-    liftIO $ withConn $ \p -> query p "MATCH (n:TestStreamTx) DELETE n" >> pure ()
+    liftIO $ withConn $ \p -> queryIO p "MATCH (n:TestStreamTx) DELETE n" >> pure ()
 
 
 largeResultTests :: TopSpec
@@ -263,7 +264,7 @@ routingStreamTests = describe "Routing pool streaming" $ do
     V.length (V.fromList result) `shouldBe` 1
     -- Cleanup
     liftIO $ withRoutingConnection rp WriteAccess $ \p ->
-      query p "MATCH (n:TestRoutingStream) DELETE n" >> pure ()
+      queryIO p "MATCH (n:TestRoutingStream) DELETE n" >> pure ()
     liftIO $ destroyRoutingPool rp
 
   it "withRoutingStreamP passes parameters" $ do
@@ -330,7 +331,7 @@ sessionStreamTests = describe "Session streaming" $ do
     length bms1 `shouldBe` 1
     -- Cleanup
     liftIO $ withConnection pool $ \p ->
-      query p "MATCH (n:TestSessionStream) DELETE n" >> pure ()
+      queryIO p "MATCH (n:TestSessionStream) DELETE n" >> pure ()
     liftIO $ destroyPool pool
 
   it "sessionWriteStreamP with parameters" $ do
@@ -350,7 +351,7 @@ sessionStreamTests = describe "Session streaming" $ do
       Nothing -> expectationFailure "Expected 77"
     -- Cleanup
     liftIO $ withConnection pool $ \p ->
-      query p "MATCH (n:TestSessionStreamP) DELETE n" >> pure ()
+      queryIO p "MATCH (n:TestSessionStreamP) DELETE n" >> pure ()
     liftIO $ destroyPool pool
 
 
@@ -382,7 +383,7 @@ routingSessionStreamTests = describe "Routing session streaming" $ do
     length bms `shouldBe` 1
     -- Cleanup
     liftIO $ withRoutingConnection rp WriteAccess $ \p ->
-      query p "MATCH (n:TestRoutingSessStream) DELETE n" >> pure ()
+      queryIO p "MATCH (n:TestRoutingSessStream) DELETE n" >> pure ()
     liftIO $ destroyRoutingPool rp
 
 
