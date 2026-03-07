@@ -9,6 +9,17 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - ghc: "9.6.7"
+            stack-yaml: stack-ghc-9.6.yaml
+          - ghc: "9.8.4"
+            stack-yaml: stack-ghc-9.8.yaml
+          - ghc: "9.10.3"
+            stack-yaml: stack.yaml
+          - ghc: "9.12.3"
+            stack-yaml: stack-ghc-9.12.yaml
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,10 +38,17 @@ jobs:
       - name: Install Stack
         run: curl -sSL https://get.haskellstack.org/ | sh
 
-      - name: Build all packages
+      - name: Cache Stack dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.stack
+          key: stack-${{ matrix.ghc }}-${{ hashFiles(format('bolty/{0}', matrix.stack-yaml)) }}
+          restore-keys: stack-${{ matrix.ghc }}-
+
+      - name: Build all packages (GHC ${{ matrix.ghc }})
         working-directory: bolty
-        run: stack build --no-nix --no-system-ghc
+        run: stack build --stack-yaml ${{ matrix.stack-yaml }} --no-nix --no-system-ghc
 
       - name: Run unit tests
         working-directory: bolty
-        run: stack test bolty-streamly:bolty-streamly-test --no-nix --no-system-ghc
+        run: stack test bolty-streamly:bolty-streamly-test --stack-yaml ${{ matrix.stack-yaml }} --no-nix --no-system-ghc
