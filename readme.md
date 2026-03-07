@@ -23,16 +23,18 @@ main = do
   case Bolt.validateConfig cfg of
     Failure _ -> error "bad config"
     Success vc -> do
-      conn <- Bolt.connect vc
-      s <- BoltS.queryStream conn "MATCH (n:Person) RETURN n.name AS name, n.age AS age"
+      pool <- Bolt.createPool vc Bolt.defaultPoolConfig
+      let s = BoltS.poolStream pool "MATCH (n:Person) RETURN n.name AS name"
       count <- Stream.fold Fold.length s
       putStrLn $ "Processed " <> show count <> " records"
-      Bolt.close conn
+      Bolt.destroyPool pool
 ```
 
 ## API overview
 
-The module exposes four levels of streaming, each with variants for parameters (`P`) and typed decoding (`As`):
+The module exposes four levels of streaming, each with variants for parameters (`P`) and typed decoding (`As`).
+
+Streams from pool, routing, and session functions are ordinary values — you can store them, pass them around, and compose them freely. Connection lifetime is tied to the stream via `bracketIO`: the connection is acquired when consumption begins and released when the stream completes or errors.
 
 ### Direct connection
 
@@ -50,12 +52,13 @@ queryStreamPAs :: RowDecoder a -> Connection -> Text -> HashMap Text Ps -> IO (S
 
 ### Connection pool
 
-Acquires a connection, streams the query, and releases when the consumer returns. **The stream must be fully consumed within the callback** — the connection is returned to the pool when `consume` finishes:
+Acquires a pooled connection when the stream is consumed and returns it when the stream finishes:
 
 ```haskell
-withPoolStream   :: BoltPool -> Text -> (Stream IO Record -> IO a) -> IO a
-withPoolStreamAs :: RowDecoder a -> BoltPool -> Text -> (Stream IO a -> IO b) -> IO b
--- + P variants for parameters
+poolStream   :: BoltPool -> Text -> Stream IO Record
+poolStreamP  :: BoltPool -> Text -> HashMap Text Ps -> Stream IO Record
+poolStreamAs :: RowDecoder a -> BoltPool -> Text -> Stream IO a
+poolStreamPAs :: RowDecoder a -> BoltPool -> Text -> HashMap Text Ps -> Stream IO a
 ```
 
 Example:
@@ -63,8 +66,8 @@ Example:
 ```haskell
 pool <- Bolt.createPool vc Bolt.defaultPoolConfig
 
-withPoolStreamAs personDecoder pool "MATCH (p:Person) RETURN p.name, p.age" $ \stream ->
-  Stream.mapM_ (\person -> putStrLn (show person)) stream
+let people = BoltS.poolStreamAs personDecoder pool "MATCH (p:Person) RETURN p.name, p.age"
+Stream.mapM_ print people
 
 Bolt.destroyPool pool
 ```
@@ -74,27 +77,29 @@ Bolt.destroyPool pool
 Routes queries to the appropriate cluster member based on access mode:
 
 ```haskell
-withRoutingStream   :: RoutingPool -> AccessMode -> Text -> (Stream IO Record -> IO a) -> IO a
-withRoutingStreamAs :: RowDecoder a -> RoutingPool -> AccessMode -> Text -> (Stream IO a -> IO b) -> IO b
--- + P variants for parameters
+routingStream   :: RoutingPool -> AccessMode -> Text -> Stream IO Record
+routingStreamP  :: RoutingPool -> AccessMode -> Text -> HashMap Text Ps -> Stream IO Record
+routingStreamAs :: RowDecoder a -> RoutingPool -> AccessMode -> Text -> Stream IO a
+routingStreamPAs :: RowDecoder a -> RoutingPool -> AccessMode -> Text -> HashMap Text Ps -> Stream IO a
 ```
 
 Example:
 
 ```haskell
-withRoutingStreamAs decoder routingPool ReadAccess "MATCH (n) RETURN n" $ \stream ->
-  Stream.fold Fold.toList stream
+let results = BoltS.routingStreamAs decoder routingPool ReadAccess "MATCH (n) RETURN n"
+items <- Stream.fold Fold.toList results
 ```
 
 ### Session (causal consistency)
 
-Runs streaming queries inside managed transactions with automatic bookmark tracking, retries on transient errors, and read/write routing:
+Runs streaming queries inside managed transactions with automatic bookmark tracking and read/write routing:
 
 ```haskell
-sessionReadStream   :: Session -> Text -> (Stream IO Record -> IO a) -> IO a
-sessionWriteStream  :: Session -> Text -> (Stream IO Record -> IO a) -> IO a
-sessionReadStreamAs :: RowDecoder a -> Session -> Text -> (Stream IO a -> IO b) -> IO b
--- + P and Write variants
+sessionReadStream    :: Session -> Text -> Stream IO Record
+sessionWriteStream   :: Session -> Text -> Stream IO Record
+sessionReadStreamAs  :: RowDecoder a -> Session -> Text -> Stream IO a
+sessionWriteStreamAs :: RowDecoder a -> Session -> Text -> Stream IO a
+-- + P variants for parameters
 ```
 
 Example:
@@ -103,12 +108,12 @@ Example:
 session <- Bolt.createSession pool Bolt.defaultSessionConfig
 
 -- Write some data
-sessionWriteStream session "CREATE (p:Person {name: 'Alice'})" $ \s ->
-  Stream.fold Fold.drain s
+Stream.fold Fold.drain $
+  BoltS.sessionWriteStream session "CREATE (p:Person {name: 'Alice'})"
 
 -- Read it back (guaranteed to see Alice via bookmarks)
-sessionReadStreamAs personDecoder session "MATCH (p:Person) RETURN p.name, p.age" $ \stream ->
-  Stream.mapM_ print stream
+Stream.mapM_ print $
+  BoltS.sessionReadStreamAs personDecoder session "MATCH (p:Person) RETURN p.name, p.age"
 ```
 
 ## Low-level: pullStream
@@ -120,22 +125,6 @@ pullStream :: Connection -> IO (Stream IO Record)
 ```
 
 This expects the connection to already be in `Streaming` or `TXstreaming` state (after a RUN has been acknowledged). It handles PULL batching and state transitions automatically.
-
-## Important: stream lifetime
-
-With the pool, routing, and session variants, the `Stream` is **only valid inside the callback**. The connection is released when the callback returns, so you cannot store the stream or consume it later:
-
-```haskell
--- WRONG: stream escapes the callback
-stream <- withPoolStream pool "MATCH (n) RETURN n" pure  -- connection released!
-Stream.mapM_ print stream  -- BOOM: connection already returned to pool
-
--- RIGHT: consume inside the callback
-withPoolStream pool "MATCH (n) RETURN n" $ \stream ->
-  Stream.mapM_ print stream
-```
-
-With `queryStream` / `queryStreamP` on a bare connection, you manage the connection lifetime yourself, so the stream lives as long as the connection does.
 
 ## Naming convention
 

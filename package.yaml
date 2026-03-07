@@ -50,7 +50,7 @@ flags:
 dependencies:
   - base               >= 4.18 && < 5
   - bolty              >= 0.1  && < 0.2
-  - packstream         >= 0.1  && < 0.2
+  - packstream-bolt    >= 0.1  && < 0.2
   - streamly-core      >= 0.2  && < 0.3
   - text               >= 2.0  && < 2.2
   - unordered-containers >= 0.2 && < 0.3

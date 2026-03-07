@@ -3,17 +3,18 @@ module Main where
 import           Test.Sandwich
 
 import           Database.Bolty.Streamly (Stream, queryStream, queryStreamP, pullStream,
-                                         withPoolStream, withPoolStreamP,
-                                         withRoutingStream, withRoutingStreamP,
+                                         poolStream, poolStreamP,
+                                         routingStream, routingStreamP,
                                          sessionReadStream, sessionReadStreamP,
                                          sessionWriteStream, sessionWriteStreamP,
                                          queryStreamAs, queryStreamPAs,
-                                         withPoolStreamAs, withPoolStreamPAs,
-                                         withRoutingStreamAs, withRoutingStreamPAs,
+                                         poolStreamAs, poolStreamPAs,
+                                         routingStreamAs, routingStreamPAs,
                                          sessionReadStreamAs, sessionReadStreamPAs,
                                          sessionWriteStreamAs, sessionWriteStreamPAs)
 import           Database.Bolty          (BoltPool, Connection, Record, Session,
                                          AccessMode(..))
+import           Data.Text              (Text)
 import           Database.Bolty.Decode   (RowDecoder, column, int64)
 import           Database.Bolty.Routing  (RoutingPool)
 import           Data.Int                (Int64)
@@ -33,34 +34,33 @@ _checkQueryStreamP conn = queryStreamP conn "RETURN $x" (H.singleton "x" (PsInte
 _checkPullStream :: Connection -> IO (Stream IO Record)
 _checkPullStream conn = pullStream conn
 
-_checkWithPoolStream :: BoltPool -> IO Int
-_checkWithPoolStream pool = withPoolStream pool "RETURN 1" $ \_ -> pure 1
+_checkPoolStream :: BoltPool -> Stream IO Record
+_checkPoolStream pool = poolStream pool "RETURN 1"
 
-_checkWithPoolStreamP :: BoltPool -> IO Int
-_checkWithPoolStreamP pool =
-  withPoolStreamP pool "RETURN $x" (H.singleton "x" (PsInteger 1)) $ \_ -> pure 1
+_checkPoolStreamP :: BoltPool -> Stream IO Record
+_checkPoolStreamP pool =
+  poolStreamP pool "RETURN $x" (H.singleton "x" (PsInteger 1))
 
-_checkWithRoutingStream :: RoutingPool -> IO Int
-_checkWithRoutingStream rp =
-  withRoutingStream rp ReadAccess "RETURN 1" $ \_ -> pure 1
+_checkRoutingStream :: RoutingPool -> Stream IO Record
+_checkRoutingStream rp = routingStream rp ReadAccess "RETURN 1"
 
-_checkWithRoutingStreamP :: RoutingPool -> IO Int
-_checkWithRoutingStreamP rp =
-  withRoutingStreamP rp ReadAccess "RETURN $x" (H.singleton "x" (PsInteger 1)) $ \_ -> pure 1
+_checkRoutingStreamP :: RoutingPool -> Stream IO Record
+_checkRoutingStreamP rp =
+  routingStreamP rp ReadAccess "RETURN $x" (H.singleton "x" (PsInteger 1))
 
-_checkSessionReadStream :: Session -> IO Int
-_checkSessionReadStream s = sessionReadStream s "RETURN 1" $ \_ -> pure 1
+_checkSessionReadStream :: Session -> Stream IO Record
+_checkSessionReadStream s = sessionReadStream s "RETURN 1"
 
-_checkSessionReadStreamP :: Session -> IO Int
+_checkSessionReadStreamP :: Session -> Stream IO Record
 _checkSessionReadStreamP s =
-  sessionReadStreamP s "RETURN $x" (H.singleton "x" (PsInteger 1)) $ \_ -> pure 1
+  sessionReadStreamP s "RETURN $x" (H.singleton "x" (PsInteger 1))
 
-_checkSessionWriteStream :: Session -> IO Int
-_checkSessionWriteStream s = sessionWriteStream s "RETURN 1" $ \_ -> pure 1
+_checkSessionWriteStream :: Session -> Stream IO Record
+_checkSessionWriteStream s = sessionWriteStream s "RETURN 1"
 
-_checkSessionWriteStreamP :: Session -> IO Int
+_checkSessionWriteStreamP :: Session -> Stream IO Record
 _checkSessionWriteStreamP s =
-  sessionWriteStreamP s "RETURN $x" (H.singleton "x" (PsInteger 1)) $ \_ -> pure 1
+  sessionWriteStreamP s "RETURN $x" (H.singleton "x" (PsInteger 1))
 
 -- Decode variant type-level checks
 
@@ -73,34 +73,34 @@ _checkQueryStreamAs conn = queryStreamAs _decoder conn "RETURN 1"
 _checkQueryStreamPAs :: Connection -> IO (Stream IO Int64)
 _checkQueryStreamPAs conn = queryStreamPAs _decoder conn "RETURN $x" (H.singleton "x" (PsInteger 1))
 
-_checkWithPoolStreamAs :: BoltPool -> IO Int
-_checkWithPoolStreamAs pool = withPoolStreamAs _decoder pool "RETURN 1" $ \_ -> pure 1
+_checkPoolStreamAs :: BoltPool -> Stream IO Int64
+_checkPoolStreamAs pool = poolStreamAs _decoder pool "RETURN 1"
 
-_checkWithPoolStreamPAs :: BoltPool -> IO Int
-_checkWithPoolStreamPAs pool =
-  withPoolStreamPAs _decoder pool "RETURN $x" (H.singleton "x" (PsInteger 1)) $ \_ -> pure 1
+_checkPoolStreamPAs :: BoltPool -> Stream IO Int64
+_checkPoolStreamPAs pool =
+  poolStreamPAs _decoder pool "RETURN $x" (H.singleton "x" (PsInteger 1))
 
-_checkWithRoutingStreamAs :: RoutingPool -> IO Int
-_checkWithRoutingStreamAs rp =
-  withRoutingStreamAs _decoder rp ReadAccess "RETURN 1" $ \_ -> pure 1
+_checkRoutingStreamAs :: RoutingPool -> Stream IO Int64
+_checkRoutingStreamAs rp =
+  routingStreamAs _decoder rp ReadAccess "RETURN 1"
 
-_checkWithRoutingStreamPAs :: RoutingPool -> IO Int
-_checkWithRoutingStreamPAs rp =
-  withRoutingStreamPAs _decoder rp ReadAccess "RETURN $x" (H.singleton "x" (PsInteger 1)) $ \_ -> pure 1
+_checkRoutingStreamPAs :: RoutingPool -> Stream IO Int64
+_checkRoutingStreamPAs rp =
+  routingStreamPAs _decoder rp ReadAccess "RETURN $x" (H.singleton "x" (PsInteger 1))
 
-_checkSessionReadStreamAs :: Session -> IO Int
-_checkSessionReadStreamAs s = sessionReadStreamAs _decoder s "RETURN 1" $ \_ -> pure 1
+_checkSessionReadStreamAs :: Session -> Stream IO Int64
+_checkSessionReadStreamAs s = sessionReadStreamAs _decoder s "RETURN 1"
 
-_checkSessionReadStreamPAs :: Session -> IO Int
+_checkSessionReadStreamPAs :: Session -> Stream IO Int64
 _checkSessionReadStreamPAs s =
-  sessionReadStreamPAs _decoder s "RETURN $x" (H.singleton "x" (PsInteger 1)) $ \_ -> pure 1
+  sessionReadStreamPAs _decoder s "RETURN $x" (H.singleton "x" (PsInteger 1))
 
-_checkSessionWriteStreamAs :: Session -> IO Int
-_checkSessionWriteStreamAs s = sessionWriteStreamAs _decoder s "RETURN 1" $ \_ -> pure 1
+_checkSessionWriteStreamAs :: Session -> Stream IO Int64
+_checkSessionWriteStreamAs s = sessionWriteStreamAs _decoder s "RETURN 1"
 
-_checkSessionWriteStreamPAs :: Session -> IO Int
+_checkSessionWriteStreamPAs :: Session -> Stream IO Int64
 _checkSessionWriteStreamPAs s =
-  sessionWriteStreamPAs _decoder s "RETURN $x" (H.singleton "x" (PsInteger 1)) $ \_ -> pure 1
+  sessionWriteStreamPAs _decoder s "RETURN $x" (H.singleton "x" (PsInteger 1))
 
 
 tests :: TopSpec
@@ -122,20 +122,20 @@ tests = describe "Database.Bolty.Streamly" $ do
     let _ = undefined :: Stream IO Int
     pure ()
 
-  it "withPoolStream has correct type" $ do
-    let _ = _checkWithPoolStream
+  it "poolStream has correct type" $ do
+    let _ = _checkPoolStream
     pure ()
 
-  it "withPoolStreamP has correct type" $ do
-    let _ = _checkWithPoolStreamP
+  it "poolStreamP has correct type" $ do
+    let _ = _checkPoolStreamP
     pure ()
 
-  it "withRoutingStream has correct type" $ do
-    let _ = _checkWithRoutingStream
+  it "routingStream has correct type" $ do
+    let _ = _checkRoutingStream
     pure ()
 
-  it "withRoutingStreamP has correct type" $ do
-    let _ = _checkWithRoutingStreamP
+  it "routingStreamP has correct type" $ do
+    let _ = _checkRoutingStreamP
     pure ()
 
   it "sessionReadStream has correct type" $ do
@@ -162,20 +162,20 @@ tests = describe "Database.Bolty.Streamly" $ do
     let _ = _checkQueryStreamPAs
     pure ()
 
-  it "withPoolStreamAs has correct type" $ do
-    let _ = _checkWithPoolStreamAs
+  it "poolStreamAs has correct type" $ do
+    let _ = _checkPoolStreamAs
     pure ()
 
-  it "withPoolStreamPAs has correct type" $ do
-    let _ = _checkWithPoolStreamPAs
+  it "poolStreamPAs has correct type" $ do
+    let _ = _checkPoolStreamPAs
     pure ()
 
-  it "withRoutingStreamAs has correct type" $ do
-    let _ = _checkWithRoutingStreamAs
+  it "routingStreamAs has correct type" $ do
+    let _ = _checkRoutingStreamAs
     pure ()
 
-  it "withRoutingStreamPAs has correct type" $ do
-    let _ = _checkWithRoutingStreamPAs
+  it "routingStreamPAs has correct type" $ do
+    let _ = _checkRoutingStreamPAs
     pure ()
 
   it "sessionReadStreamAs has correct type" $ do
@@ -192,6 +192,48 @@ tests = describe "Database.Bolty.Streamly" $ do
 
   it "sessionWriteStreamPAs has correct type" $ do
     let _ = _checkSessionWriteStreamPAs
+    pure ()
+
+  -- Verify pool/routing/session functions return Stream (not IO Stream)
+  -- This is the key bracketIO design property: streams are pure values.
+
+  it "poolStream returns Stream IO Record (not IO)" $ do
+    let _ = poolStream :: BoltPool -> Text -> Stream IO Record
+    pure ()
+
+  it "routingStream returns Stream IO Record (not IO)" $ do
+    let _ = routingStream :: RoutingPool -> AccessMode -> Text -> Stream IO Record
+    pure ()
+
+  it "sessionReadStream returns Stream IO Record (not IO)" $ do
+    let _ = sessionReadStream :: Session -> Text -> Stream IO Record
+    pure ()
+
+  it "sessionWriteStream returns Stream IO Record (not IO)" $ do
+    let _ = sessionWriteStream :: Session -> Text -> Stream IO Record
+    pure ()
+
+  it "poolStreamAs returns Stream IO a (not IO)" $ do
+    let _ = poolStreamAs :: RowDecoder Int64 -> BoltPool -> Text -> Stream IO Int64
+    pure ()
+
+  it "routingStreamAs returns Stream IO a (not IO)" $ do
+    let _ = routingStreamAs :: RowDecoder Int64 -> RoutingPool -> AccessMode -> Text -> Stream IO Int64
+    pure ()
+
+  it "sessionReadStreamAs returns Stream IO a (not IO)" $ do
+    let _ = sessionReadStreamAs :: RowDecoder Int64 -> Session -> Text -> Stream IO Int64
+    pure ()
+
+  -- Verify bare-connection functions still return IO (Stream IO Record)
+  -- since they perform RUN eagerly before streaming PULL.
+
+  it "queryStream returns IO (Stream IO Record)" $ do
+    let _ = queryStream :: Connection -> Text -> IO (Stream IO Record)
+    pure ()
+
+  it "queryStreamAs returns IO (Stream IO a)" $ do
+    let _ = queryStreamAs :: RowDecoder Int64 -> Connection -> Text -> IO (Stream IO Int64)
     pure ()
 
 
