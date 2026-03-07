@@ -11,3 +11,6 @@ and this project adheres to the
 - Initial release
 - Streamly Stream interface for bolty queries
 - Lazy record-by-record consumption of Neo4j query results
+- Connection pool, routing pool, and session streaming with automatic resource management via `bracketIO`
+- Streams are composable values — store, pass, and combine them freely
+- Typed decoding variants (`As` suffix) with `RowDecoder`
