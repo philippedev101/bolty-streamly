@@ -1,40 +1,77 @@
 name:                bolty-streamly
-version:             0.0.0.1
+version:             0.1.0.0
 synopsis:            Streamly streaming interface for bolty Neo4j driver
 description: |-
   Streaming queries over Neo4j using streamly streams.
   Wraps bolty's query functions with streamly's Stream type for
   lazy record-by-record consumption.
-homepage:            https://github.com/philippedev101/bolty#readme
+github:              philippedev101/bolty-streamly
 license:             Apache-2.0
 author:              philippedev101
 maintainer:          philippedev101@gmail.com
-copyright:           (c) 2023 philippedev101
+copyright:           (c) 2023-2026 philippedev101
 category:            Database
 license-file:        LICENSE
+tested-with:         GHC == 9.6.7 || == 9.8.4 || == 9.10.3 || == 9.12.3
+extra-source-files:
+- readme.md
+- changelog.md
 
 language: GHC2021
 
+default-extensions:
+- DataKinds
+- DefaultSignatures
+- DeriveAnyClass
+- DerivingVia
+- DuplicateRecordFields
+- FunctionalDependencies
+- GADTs
+- LambdaCase
+- MultiWayIf
+- OverloadedRecordDot
+- OverloadedStrings
+- PartialTypeSignatures
+- RecordWildCards
+- RoleAnnotations
+- TypeFamilies
+- UnboxedSums
+- UnboxedTuples
+- UnliftedDatatypes
+- UnliftedNewtypes
+- ViewPatterns
+
+flags:
+  dev:
+    description: Turn on -Werror and other developer flags
+    manual: true
+    default: false
+
 dependencies:
-  - base >= 4.7 && < 5
-  - bolty
-  - packstream
-  - streamly-core >= 0.2.0
-  - text
-  - unordered-containers
-  - vector
+  - base               >= 4.18 && < 5
+  - bolty              >= 0.1  && < 0.2
+  - packstream         >= 0.1  && < 0.2
+  - streamly-core      >= 0.2  && < 0.3
+  - text               >= 2.0  && < 2.2
+  - unordered-containers >= 0.2 && < 0.3
+  - vector             >= 0.13 && < 0.14
 
 ghc-options:
-  - -Wall
-  - -Wcompat
-  - -Widentities
-  - -Wincomplete-record-updates
-  - -Wincomplete-uni-patterns
-  - -Wmissing-export-lists
-  - -Wmissing-home-modules
-  - -Wpartial-fields
-  - -Wredundant-constraints
-  - -Wunused-packages
+  - -Weverything
+  - -Wno-all-missed-specialisations
+  - -Wno-implicit-prelude
+  - -Wno-missed-specialisations
+  - -Wno-missing-import-lists
+  - -Wno-missing-safe-haskell-mode
+  - -Wno-name-shadowing
+  - -Wno-prepositive-qualified-module
+  - -Wno-safe
+  - -Wno-unsafe
+
+when:
+  - condition: flag(dev)
+    ghc-options:
+      - -Werror
 
 library:
   source-dirs: src
@@ -50,6 +87,11 @@ tests:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
+      - -Wno-missing-export-lists
+      - -Wno-missing-local-signatures
+      - -Wno-monomorphism-restriction
+      - -Wno-unused-imports
+      - -Wno-unused-packages
   bolty-streamly-integration:
     source-dirs: integration
     main: Main.hs
@@ -62,3 +104,8 @@ tests:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
+      - -Wno-missing-export-lists
+      - -Wno-missing-local-signatures
+      - -Wno-monomorphism-restriction
+      - -Wno-unused-imports
+      - -Wno-unused-packages

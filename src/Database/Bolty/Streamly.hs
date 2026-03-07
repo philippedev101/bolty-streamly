@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Streamly streaming interface for bolty Neo4j queries.
 --
 -- Instead of buffering all result records into a 'V.Vector', this module
@@ -52,6 +50,7 @@ module Database.Bolty.Streamly
   ) where
 
 import           Control.Exception              (throwIO)
+import           Data.Kind                      (Type)
 import           Data.Text                      (Text)
 import           GHC.Stack                      (HasCallStack)
 import qualified Data.HashMap.Lazy              as H
@@ -117,6 +116,7 @@ decodeOrThrow decoder columns record =
 
 -- | Pull state machine.  @NeedPull@ means we need to send a new PULL
 -- message to the server.  @Done@ means the result set is exhausted.
+type PullState :: Type
 data PullState = NeedPull | Done
 
 
