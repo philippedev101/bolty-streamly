@@ -69,7 +69,7 @@ import           Database.Bolty.Connection      (requestResponseRunIO)
 import qualified Database.Bolty.Connection.Pipe as P
 import           Database.Bolty.Connection.Type
 import           Database.Bolty.Decode          (RowDecoder, decodeRow)
-import           Database.Bolty.Message.Request (Request(..), defaultPull, Begin(Begin), TelemetryApi(..))
+import           Database.Bolty.Message.Request (Request(..), Pull(..), Begin(Begin), TelemetryApi(..))
 import           Database.Bolty.Message.Response (Response(..), Failure(..), successFields)
 import           Database.Bolty.Pool            (BoltPool, CheckedOutConnection(..),
                                                   acquireConnection, releaseConnection,
@@ -144,7 +144,8 @@ data PullState = NeedPull | Done
 pullStream :: HasCallStack => Connection -> IO (Stream IO Record)
 pullStream conn = do
   P.requireStateIO conn [Streaming, TXstreaming] "PULL"
-  P.flushIO conn $ RPull defaultPull
+  let pull = Pull { n = conn.fetchSize, qid = Nothing }
+  P.flushIO conn $ RPull pull
   pure $ Stream.unfoldrM (step conn) NeedPull
   where
     step :: HasCallStack => Connection -> PullState -> IO (Maybe (Record, PullState))
@@ -162,7 +163,8 @@ pullStream conn = do
                             _            -> False
                           Nothing -> False
           if hasMore then do
-            P.flushIO c $ RPull defaultPull
+            let pull = Pull { n = c.fetchSize, qid = Nothing }
+            P.flushIO c $ RPull pull
             step c NeedPull
           else do
             st <- P.getState c
