@@ -5,7 +5,7 @@ cabal-version: 1.12
 -- see: https://github.com/sol/hpack
 
 name:           bolty-streamly
-version:        0.1.0.0
+version:        0.1.0.1
 synopsis:       Streamly streaming interface for bolty Neo4j driver
 description:    Streaming queries over Neo4j using streamly streams.
                 Wraps bolty's query functions with streamly's Stream type for
