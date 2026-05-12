@@ -65,6 +65,7 @@ import qualified Data.Vector                    as V
 import           Streamly.Data.Stream           (Stream)
 import qualified Streamly.Data.Stream           as Stream
 
+import           Database.Bolty.AccessMode      (AccessMode(..))
 import           Database.Bolty.Connection      (requestResponseRunIO)
 import qualified Database.Bolty.Connection.Pipe as P
 import           Database.Bolty.Connection.Type
@@ -75,8 +76,7 @@ import           Database.Bolty.Pool            (BoltPool, CheckedOutConnection(
                                                   acquireConnection, releaseConnection,
                                                   releaseConnectionOnError)
 import           Database.Bolty.Record          (Record)
-import           Database.Bolty.Routing         (AccessMode(..), RoutingPool,
-                                                  acquireRoutingConnection)
+import           Database.Bolty.Routing         (RoutingPool, acquireRoutingConnection)
 import           Database.Bolty.Session         (Session(..), SessionPool(..), SessionConfig(..),
                                                   BookmarkManager, getBookmarks, updateBookmark)
 
@@ -326,12 +326,11 @@ sessionStreamDecoded decoder Session{sPool, sBookmarks, sConfig, sTelemetrySent}
 sessionAcquire :: SessionPool -> BookmarkManager -> SessionConfig -> IORef Bool
                -> AccessMode -> IO CheckedOutConnection
 sessionAcquire sPool sBookmarks sConfig _telRef mode = do
-  let modeChar = case mode of { ReadAccess -> 'r'; WriteAccess -> 'w' }
   let db = sessionDatabase sConfig
   coc <- acquireSessionConnection sPool mode
   let conn = cocConnection coc
   bms <- getBookmarks sBookmarks
-  P.beginTx conn $ Begin (V.fromList bms) Nothing H.empty modeChar db Nothing
+  P.beginTx conn $ Begin (V.fromList bms) Nothing H.empty mode db Nothing
   pure coc
 
 
